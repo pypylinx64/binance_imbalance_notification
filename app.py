@@ -48,8 +48,17 @@ def calc_imbalance(order_book, depth=LEVELS):
     bids_list = order_book.get("bids", [])[:depth]
     asks_list = order_book.get("asks", [])[:depth]
 
-    bid_vol = float(np.array(bids_list, dtype=float)[:, 1].sum()) if bids_list else 0.0
-    ask_vol = float(np.array(asks_list, dtype=float)[:, 1].sum()) if asks_list else 0.0
+    if bids_list:
+        bids = np.array(bids_list, dtype=float)
+        bid_vol = float(bids[:, 1].sum())
+    else:
+        bid_vol = 0.0
+
+    if asks_list:
+        asks = np.array(asks_list, dtype=float)
+        ask_vol = float(asks[:, 1].sum())
+    else:
+        ask_vol = 0.0
 
     denom = bid_vol + ask_vol
     if denom == 0:
