@@ -72,7 +72,7 @@ async def watcher_loop(app):
                 continue
 
             try:
-                ob = exchange.fetch_order_book(symbol, limit=LEVELS)
+                ob = await asyncio.to_thread(exchange.fetch_order_book, symbol, LEVELS)
                 imbalance = calc_imbalance(ob, depth=LEVELS)
             except Exception:
                 continue
