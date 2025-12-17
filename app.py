@@ -1,8 +1,8 @@
 import os
 import asyncio
+from datetime import datetime
 import ccxt
 import numpy as np
-
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
@@ -22,11 +22,10 @@ def load_env_file(path=".env"):
         pass
 
 
+# ------------ CONFIG ------------
 load_env_file()
 TOKEN = os.environ["TELEGRAM_TOKEN"]
 
-
-# ------------ CONFIG ------------
 INTERVAL = 1.0
 LEVELS = 10
 
@@ -84,12 +83,13 @@ async def watcher_loop(app):
                 cfg["last_alert"] = imbalance
 
                 text = f"""\
-{symbol} imbalance alert
-
+⚠ {symbol} imbalance alert ⚠
+-----------------------------
 Current imbalance: {imbalance:.3f}
-Alert threshold (X): {x:.3f}
-
-Buying pressure is stronger than selling pressure.
+Alert imbalance (X): {x:.3f}
+Current datetime: {datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")}
+---------------------------------
+Buyers are stronger than sellers.
 """
                 try:
                     await app.bot.send_message(chat_id=chat_id, text=text)
@@ -157,6 +157,13 @@ async def cmd_set(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(f"Set {symbol} X={x}")
 
+async def cmd_del(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.chat_data:
+        await update.message.reply_text("Nothing to delete")
+        return
+
+    context.chat_data.clear()
+    await update.message.reply_text("Alerts disabled")
 
 # ------------ MAIN ------------
 def main():
@@ -164,6 +171,7 @@ def main():
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("set", cmd_set))
+    app.add_handler(CommandHandler("del", cmd_del))
 
     app.run_polling()
 
