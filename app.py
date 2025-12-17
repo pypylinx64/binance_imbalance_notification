@@ -13,11 +13,14 @@ def load_env_file(path=".env"):
         with open(path) as f:
             for line in f:
                 line = line.strip()
+
                 if not line or line.startswith("#"):
                     continue
+
                 if "=" in line:
                     k, v = line.split("=", 1)
                     os.environ.setdefault(k.strip(), v.strip())
+
     except FileNotFoundError:
         pass
 
@@ -26,7 +29,7 @@ def load_env_file(path=".env"):
 load_env_file()
 TOKEN = os.environ["TELEGRAM_TOKEN"]
 
-INTERVAL = 1.0
+INTERVAL = 60.0
 LEVELS = 10
 
 exchange = ccxt.binance({"enableRateLimit": True})
@@ -65,7 +68,6 @@ async def watcher_loop(app):
         for chat_id, cfg in list(app.chat_data.items()):
             symbol = cfg.get("symbol")
             x = cfg.get("x")
-            last_alert = cfg.get("last_alert")
 
             if not symbol or x is None:
                 continue
@@ -73,13 +75,11 @@ async def watcher_loop(app):
             try:
                 ob = await asyncio.to_thread(exchange.fetch_order_book, symbol, LEVELS)
                 imbalance = calc_imbalance(ob, depth=LEVELS)
+
             except Exception:
                 continue
 
             if imbalance > x:
-                if last_alert is not None and abs(imbalance - last_alert) < 0.02:
-                    continue
-
                 cfg["last_alert"] = imbalance
 
                 text = f"""\
@@ -101,7 +101,9 @@ Buyers are stronger than sellers.
 
 # ------------ TELEGRAM API ------------
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     global watcher_started
+
     if not watcher_started:
         watcher_started = True
         asyncio.create_task(watcher_loop(context.application))
@@ -109,23 +111,27 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = f"""\
 This bot watches the Binance order book.
 
-It compares how much traders want to BUY
-with how much they want to SELL near the current price.
-
 When buying pressure becomes much stronger
 than selling pressure, you get an alert.
 
-Command:
-  /set BTC 0.3
+Commands:
+/start  – show this message
+/set BTC 0.3  – set or replace alert
+/del    – disable alerts
 
 X controls sensitivity:
-higher X = only very strong buyer pressure
-will trigger a notification.
+higher X = stronger buyer pressure
+required for a notification.
+
+Time update: {INTERVAL / 60} min; 
+TOP ask/bids: {LEVELS};
 """
+
     await update.message.reply_text(text)
 
 
 async def cmd_set(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     if len(context.args) != 2:
         await update.message.reply_text("Usage: /set SYMBOL X")
         return
@@ -142,12 +148,13 @@ async def cmd_set(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("X must be a number")
         return
 
-    # Optional market validation
+    # Market validation
     try:
         exchange.load_markets()
         if symbol not in exchange.markets:
             await update.message.reply_text("Pair not found on Binance")
             return
+        
     except Exception:
         pass
 
