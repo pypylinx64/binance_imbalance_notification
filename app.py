@@ -10,10 +10,9 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 # ------------ ENV ------------
 def load_env_file(path=".env"):
     try:
-        with open(path) as f:
+        with open(path, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
-
                 if not line or line.startswith("#"):
                     continue
 
@@ -29,16 +28,24 @@ def load_env_file(path=".env"):
 load_env_file()
 TOKEN = os.environ["TELEGRAM_TOKEN"]
 
-INTERVAL = 60.0
+INTERVAL = 60.0  # seconds
 LEVELS = 10
 
 exchange = ccxt.binance({"enableRateLimit": True})
+
 watcher_started = False
+watcher_task = None
+stop_event = asyncio.Event()
 
 
 # ------------ UTILS ------------
+def now_utc_str():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
 def normalize_symbol(user_symbol):
     base = user_symbol.strip().upper()
+
     if not base.isalpha():
         raise ValueError("Symbol must contain letters only (e.g. BTC)")
     return base + "/USDT"
@@ -51,12 +58,14 @@ def calc_imbalance(order_book, depth=LEVELS):
     if bids_list:
         bids = np.array(bids_list, dtype=float)
         bid_vol = float(bids[:, 1].sum())
+
     else:
         bid_vol = 0.0
 
     if asks_list:
         asks = np.array(asks_list, dtype=float)
         ask_vol = float(asks[:, 1].sum())
+
     else:
         ask_vol = 0.0
 
@@ -67,12 +76,23 @@ def calc_imbalance(order_book, depth=LEVELS):
     return float((bid_vol - ask_vol) / denom)
 
 
+async def safe_sleep(seconds: float):
+    try:
+        await asyncio.wait_for(stop_event.wait(), timeout=seconds)
+    except asyncio.TimeoutError:
+        pass
+
+
 # ------------ WATCHER ------------
 async def watcher_loop(app):
-    while True:
+
+    while not stop_event.is_set():
+
         if not app.chat_data:
-            await asyncio.sleep(0.5)
+            await safe_sleep(0.5)
             continue
+
+        ts_now = datetime.now(timezone.utc).timestamp()
 
         for chat_id, cfg in list(app.chat_data.items()):
             symbol = cfg.get("symbol")
@@ -89,33 +109,36 @@ async def watcher_loop(app):
                 continue
 
             if imbalance > x:
+
                 cfg["last_alert"] = imbalance
+                cfg["last_alert_ts"] = ts_now
 
                 text = f"""\
-⚠ {symbol} imbalance alert ⚠
------------------------------
-Current imbalance: {imbalance:.3f}
-Alert imbalance (X): {x:.3f}
-Current datetime: {datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")}
----------------------------------
+⚠ {symbol} imbalance alert
+
+Imbalance: {imbalance:.3f}
+Threshold (X): {x:.3f}
+Time (UTC): {now_utc_str()}
+
 Buyers are stronger than sellers.
 """
                 try:
                     await app.bot.send_message(chat_id=chat_id, text=text)
+
                 except Exception:
                     pass
 
-        await asyncio.sleep(INTERVAL)
+        await safe_sleep(INTERVAL)
 
 
 # ------------ TELEGRAM API ------------
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    global watcher_started
+    global watcher_started, watcher_task
 
     if not watcher_started:
         watcher_started = True
-        asyncio.create_task(watcher_loop(context.application))
+        watcher_task = context.application.create_task(watcher_loop(context.application))
 
     text = f"""\
 This bot watches the Binance order book.
@@ -132,34 +155,34 @@ X controls sensitivity:
 higher X = stronger buyer pressure
 required for a notification.
 
-Time update: {INTERVAL / 60} min; 
-TOP ask/bids: {LEVELS};
+Update interval: {INTERVAL/60:.0f} min
+Depth levels: {LEVELS}
 """
-
     await update.message.reply_text(text)
 
 
 async def cmd_set(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     if len(context.args) != 2:
         await update.message.reply_text("Usage: /set SYMBOL X")
         return
 
     try:
         symbol = normalize_symbol(context.args[0])
+
     except ValueError as e:
         await update.message.reply_text(str(e))
         return
 
     try:
         x = float(context.args[1])
+
     except ValueError:
         await update.message.reply_text("X must be a number")
         return
 
-    # Market validation
     try:
-        exchange.load_markets()
+        await asyncio.to_thread(exchange.load_markets)
+
         if symbol not in exchange.markets:
             await update.message.reply_text("Pair not found on Binance")
             return
@@ -170,19 +193,17 @@ async def cmd_set(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.chat_data["symbol"] = symbol
     context.chat_data["x"] = x
     context.chat_data["last_alert"] = None
+    context.chat_data["last_alert_ts"] = 0.0
 
     await update.message.reply_text(f"Set {symbol} X={x}")
 
 async def cmd_del(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.chat_data:
-        await update.message.reply_text("Nothing to delete")
-        return
-
     context.chat_data.clear()
     await update.message.reply_text("Alerts disabled")
 
 async def on_error(update, context):
-    print("Telegram error:", context.error)
+    print("Telegram error:", type(context.error).__name__, str(context.error)[:200])
+
 
 # ------------ MAIN ------------
 def main():
@@ -193,7 +214,13 @@ def main():
     app.add_handler(CommandHandler("del", cmd_del))
     app.add_error_handler(on_error)
 
-    app.run_polling()
+    try:
+        app.run_polling()
+
+    finally:
+        
+        # If the container is stopping/restarting, ask watcher to stop cleanly
+        stop_event.set()
 
 
 if __name__ == "__main__":
