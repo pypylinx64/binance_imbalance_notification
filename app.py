@@ -1,6 +1,6 @@
 import os
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 import ccxt
 import numpy as np
 from telegram import Update
@@ -96,7 +96,7 @@ async def watcher_loop(app):
 -----------------------------
 Current imbalance: {imbalance:.3f}
 Alert imbalance (X): {x:.3f}
-Current datetime: {datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")}
+Current datetime: {datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")}
 ---------------------------------
 Buyers are stronger than sellers.
 """
@@ -181,6 +181,9 @@ async def cmd_del(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.chat_data.clear()
     await update.message.reply_text("Alerts disabled")
 
+async def on_error(update, context):
+    print("Telegram error:", context.error)
+
 # ------------ MAIN ------------
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
@@ -188,6 +191,7 @@ def main():
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("set", cmd_set))
     app.add_handler(CommandHandler("del", cmd_del))
+    app.add_error_handler(on_error)
 
     app.run_polling()
 
