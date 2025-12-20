@@ -88,7 +88,11 @@ async def watcher_loop(app):
             except Exception:
                 continue
 
-            if imbalance > x:
+            # Only alert when crossing above threshold (not already alerted)
+            last_alert = cfg.get("last_alert")
+
+            if imbalance > x and (last_alert is None or last_alert <= x):
+                # Crossing above threshold - send alert
                 cfg["last_alert"] = imbalance
 
                 text = f"""\
@@ -104,6 +108,9 @@ Buyers are stronger than sellers.
                     await app.bot.send_message(chat_id=chat_id, text=text)
                 except Exception:
                     pass
+            elif imbalance <= x:
+                # Reset alert state when imbalance drops below threshold
+                cfg["last_alert"] = imbalance
 
         await asyncio.sleep(INTERVAL)
 
